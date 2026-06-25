@@ -1,41 +1,141 @@
-name: Java CI with Maven (Java 7 cross-compile via JDK 8)
+name: Build ASR JAR
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main, master, develop ]
+    paths:
+      - 'src/**'
+      - 'pom.xml'
+      - '.github/workflows/build.yml'
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  JAVA_DISTRIBUTION: 'temurin'
+  JAVA_VERSION: '8'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build JAR (JDK ${{ matrix.java }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: sherpa-asr-se7-linux-x86_64
+          - os: windows-latest
+            artifact_name: sherpa-asr-se7-windows-x86_64
+
     steps:
-    - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 8
-      uses: actions/setup-java@v3
-      with:
-        java-version: '8'
-        distribution: 'temurin'
-        cache: maven
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: maven
 
-    - name: Build with Maven (Cross-compile to Java 7)
-      run: mvn -B clean package --file pom.xml
+      - name: Download model from Huggingface
+        shell: bash
+        run: |
+          MODEL_DIR="src/main/resources/model"
+          MODEL_FILES=(
+            "encoder-epoch-12-avg-8.int8.onnx"
+            "decoder-epoch-12-avg-8.onnx"
+            "joiner-epoch-12-avg-8.int8.onnx"
+            "tokens.txt"
+            "bpe.model"
+          )
+          BASE_URL="https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-vi-int8-2025-04-20/resolve/main"
+          NEED_DOWNLOAD=false
 
-    - name: Upload fat JAR (all-in-one)
-      uses: actions/upload-artifact@v3
-      with:
-        name: sherpa-asr-se7-jar
-        path: target/sherpa-asr-se7-1.0.0-all.jar
+          mkdir -p "$MODEL_DIR"
+          for f in "${MODEL_FILES[@]}"; do
+            if [ ! -f "$MODEL_DIR/$f" ]; then
+              NEED_DOWNLOAD=true
+              break
+            fi
+          done
 
-    - name: Upload all build artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: sherpa-asr-se7-all
-        path: target/
+          if [ "$NEED_DOWNLOAD" = true ]; then
+            echo "Model files missing, downloading from Huggingface..."
+            for f in "${MODEL_FILES[@]}"; do
+              echo "  Downloading $f ..."
+              curl -L -o "$MODEL_DIR/$f" "$BASE_URL/$f"
+            done
+            echo "Model download complete."
+          else
+            echo "Model files found in repo, skipping download."
+          fi
 
-    - name: Upload lib dependencies
-      uses: actions/upload-artifact@v3
-      with:
-        name: sherpa-asr-se7-libs
-        path: target/lib/
+      - name: Build with Maven
+        shell: bash
+        run: mvn clean package -DskipTests -B
+
+      - name: Verify JAR
+        shell: bash
+        run: |
+          JAR="target/sherpa-asr-se7-1.0.0-all.jar"
+          if [ ! -f "$JAR" ]; then
+            echo "ERROR: $JAR not found"
+            exit 1
+          fi
+          echo "JAR size: $(du -h $JAR | cut -f1)"
+          echo "JAR contains model files:"
+          jar tf "$JAR" | grep "model/" || true
+          echo "JAR contains native libs:"
+          jar tf "$JAR" | grep "native/" || true
+          echo "JAR contains AsrService:"
+          jar tf "$JAR" | grep "AsrService" || true
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: target/sherpa-asr-se7-1.0.0-all.jar
+          retention-days: 30
+          if-no-files-found: error
+
+  # ============================================================
+  # Release: tao GitHub Release khi tag v*
+  # ============================================================
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sherpa-asr-se7-linux-x86_64
+          path: artifacts/
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sherpa-asr-se7-windows-x86_64
+          path: artifacts/
+
+      - name: Rename artifacts
+        run: |
+          mv artifacts/sherpa-asr-se7-1.0.0-all.jar \
+            artifacts/sherpa-asr-se7-1.0.0-linux-x86_64.jar
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.jar
+          generate_release_notes: true
+          draft: false
+          prerelease: false
