@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+    <!-- Source Java files -->
+    <classpathentry kind="src" path="src/main/java"/>
+
+    <!-- Resources: khong exclude gi ca de native/ va model/ deu co trong classpath -->
+    <!-- Chi exclude *.onnx va *.model de giam bin/ size (khong anh huong chay) -->
+    <classpathentry kind="src" path="src/main/resources" excluding="**/*.onnx|**/*.model"/>
+
+    <!-- JRE 1.7 (hoac JRE 1.8+ de debug) -->
+    <classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-1.7"/>
+
+    <!-- JNA 4.5.2 - JARs tuong thich JDK 7 -->
+    <classpathentry kind="lib" path="lib/jna-4.5.2.jar"/>
+    <classpathentry kind="lib" path="lib/jna-platform-4.5.2.jar"/>
+
+    <!-- Output: bin/ (Eclipse default) -->
+    <classpathentry kind="output" path="bin"/>
+</classpath>
